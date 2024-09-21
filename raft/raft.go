@@ -34,15 +34,6 @@ const (
 	replicateInterval  time.Duration = 200 * time.Millisecond
 )
 
-func (rf *Raft) resetElectoinTimerLocked() {
-	rf.electionStart = time.Now()
-	randRange := int64(electionTimeoutMax - electionTimeoutMin)
-	rf.electionTimeout = electionTimeoutMin + time.Duration(rand.Int63()%randRange)
-}
-func (rf *Raft) isElectionTimeoutLocked() bool {
-	return time.Since(rf.electionStart) > rf.electionTimeout
-}
-
 type Role string
 
 const (
@@ -96,7 +87,7 @@ func (rf *Raft) becomeFollowerLocked(term int) {
 		LOG(rf.me, rf.currentTerm, DError, "Can't become Follower,lower term:T%d", term)
 		return
 	}
-	LOG(rf.me, rf.currentTerm, DLog, "%s->Follower,For T%s", rf.role, rf.currentTerm+1)
+	LOG(rf.me, rf.currentTerm, DLog, "%s->Follower,For T%v->T%v", rf.role, rf.currentTerm, term)
 	rf.role = Follower
 	if term > rf.currentTerm {
 		rf.votedFor = -1
@@ -126,11 +117,10 @@ func (rf *Raft) becomeLeaderLocked() {
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-
-	var term int
-	var isleader bool
 	// Your code here (PartA).
-	return term, isleader
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.currentTerm, rf.role == Leader
 }
 
 // save Raft's persistent state to stable storage,
@@ -308,6 +298,20 @@ type AppendEntriesReply struct {
 	Success bool
 }
 
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	//align the term
+	if args.Term < rf.currentTerm {
+		LOG(rf.me, rf.currentTerm, DLog2, "<- S%d,Reject log,Higher term,T%d<T%d", args.LeaderId, args.Term, rf.currentTerm)
+		return
+	}
+	if args.Term >= rf.currentTerm {
+		rf.becomeFollowerLocked(args.Term)
+	}
+	rf.resetElectoinTimerLocked()
+
+}
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	return ok
@@ -318,6 +322,16 @@ func (rf *Raft) startReplication(term int) bool {
 		ok := rf.sendAppendEntries(peer, args, reply)
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
+		if !ok {
+			LOG(rf.me, rf.currentTerm, DLog, "->S%d,Lost or crashed", peer)
+			return
+		}
+		//align the term
+		if reply.Term > rf.currentTerm {
+			rf.becomeFollowerLocked(reply.Term)
+			return
+		}
+
 	}
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -335,6 +349,7 @@ func (rf *Raft) startReplication(term int) bool {
 		}
 		go replicateToPeer(peer, args)
 	}
+	return true
 }
 
 // could only replcate in the given term
@@ -389,7 +404,7 @@ func (rf *Raft) startElection(term int) {
 		return
 	}
 	for peer := 0; peer < len(rf.peers); peer++ {
-		if peer != rf.me {
+		if peer == rf.me {
 			votes++
 			continue
 		}
