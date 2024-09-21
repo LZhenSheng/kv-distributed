@@ -22,7 +22,7 @@ type RequestVoteArgs struct {
 	CandidateId int
 
 	LastLogIndex int
-	LastLongTerm  int
+	LastLongTerm int
 }
 
 // check wheter my last log is more up to date the candidate's last log
@@ -149,17 +149,17 @@ func (rf *Raft) startElection(term int) {
 		LOG(rf.me, rf.currentTerm, DVote, "Lost Candidate to %s,abort RequestVote", rf.role)
 		return
 	}
-	l:=len(rf.log)
+	l := len(rf.log)
 	for peer := 0; peer < len(rf.peers); peer++ {
 		if peer == rf.me {
 			votes++
 			continue
 		}
 		args := &RequestVoteArgs{
-			Term:        rf.currentTerm,
-			CandidateId: rf.me,
-			LastLogIndex: l-1,
-			LastLogTerm: ,
+			Term:         rf.currentTerm,
+			CandidateId:  rf.me,
+			LastLogIndex: l - 1,
+			LastLongTerm: rf.log[l-1].Term,
 		}
 		go askVoteFromPeer(peer, args)
 	}
